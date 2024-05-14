@@ -1,10 +1,17 @@
 import os
+# import json
+from typing import Sequence, Union
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from clearml import Logger
-from torchmetrics.retrieval.ndcg import RetrievalNormalizedDCG
+from torchmetrics import MetricCollection
+from torchmetrics.retrieval import (
+    RetrievalNormalizedDCG,
+    RetrievalPrecision,
+    RetrievalRecall,
+)
 
 from src.models import MultiVAE
 
@@ -12,24 +19,45 @@ from src.models import MultiVAE
 class MultiVAETrainer:
     def __init__(
         self,
-        item_num,
-        latent_dim=200,
-        num_hidden=1,
-        hidden_dim=600,
-        dropout=0.1,
-        epochs_num=10,
-        learning_rate=2e-3,
-        weight_decay=3e-6,
-        k=10,
-        beta=0.2,
-        total_anneal_steps=2000,
-        anneal_cap=1.0,
+        item_num: int,
+        latent_dim: int = 200,
+        num_hidden: int = 1,
+        hidden_dim: int = 600,
+        dropout: float = 0.1,
+        epochs_num: int = 10,
+        learning_rate: float = 2e-3,
+        weight_decay: float = 3e-6,
+        k: int = 10,
+        beta: Union[float, int, None] = None,
+        anneal_cap: float = 1.0,
+        total_anneal_steps: int = 2000,
     ):
+        """_summary_
+
+        Args:
+            item_num (int): _description_
+            latent_dim (int, optional): _description_. Defaults to 200.
+            num_hidden (int, optional): _description_. Defaults to 1.
+            hidden_dim (int, optional): _description_. Defaults to 600.
+            dropout (float, optional): _description_. Defaults to 0.1.
+            epochs_num (int, optional): _description_. Defaults to 10.
+            learning_rate (float, optional): _description_. Defaults to 2e-3.
+            weight_decay (float, optional): _description_. Defaults to 3e-6.
+            k (int, optional): _description_. Defaults to 10.
+
+            beta (Union[float, int, None], optional): If beta is a number, it's stable during training.
+                                If beta is None, it's annealing from 0 to anneal_cap.
+                                It's recommended to anneal beta for better performance. Defaults to None.
+            anneal_cap (float, optional): Upper limit of increasing beta (best beta founded).
+                                If best beta isn't founded, anneal_cap defaults to 1.0.
+            total_anneal_steps (int, optional): steps number when beta riches anneal_cap. Defaults to 2000.
+        """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         # или перенести создание модели в методы: типа для трейна так, для теста проверка на наличие модели после трейна, потом
 
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
+        self.num_hidden = num_hidden
         self.dropout = dropout
         self.model = MultiVAE(item_num, latent_dim, num_hidden, hidden_dim, dropout).to(
             self.device
@@ -37,6 +65,7 @@ class MultiVAETrainer:
 
         self.learning_rate = learning_rate
         self.epochs_num = epochs_num
+        self.weight_decay = weight_decay
 
         # self.anneal_coef = config['anneal_coef'
         # self.l2_reg = l2_reg
@@ -50,37 +79,23 @@ class MultiVAETrainer:
 
         self.k = k
 
+        self.anneal_amount = 1.0 / total_anneal_steps
         if isinstance(beta, (float, int)):
-            self.beta = beta  # мб не так
-            self.anneal_cap = anneal_cap
-            self.finding_best_beta = False
+            self.beta = beta
+            self.annealing_beta = False
         elif beta is None:
             self.beta = 0.0
-            self.finding_best_beta = True
-            self.current_best_metric = 0.0
-            self.anneal_cap = 1.0
+            self.annealing_beta = True
+            # self.current_best_metric = 0.0
+            self.anneal_cap = anneal_cap
         else:
+            pass
+            # add raising error if beta is a number and annealing_beta is True
             # или просто дефолтом поставить а здесь проверку на тип? или проверку на тип не здесь, а в мейне?
-            self.beta = 0.2  # подобрать
-            self.anneal_cap = anneal_cap  # заменить или убрать?
-
-        self.anneal_amount = 1.0 / total_anneal_steps
-
-        # self.beta = 0.0
-        # self.finding_best_beta = (
-        #     find_best_beta  # заменить на если бета None, то вычисляем
-        # )
-        # self.anneal_amount = 1.0 / total_anneal_steps
-
-        # if self.finding_best_beta:
-        #     self.current_best_metric = 0.0
-        #     self.anneal_cap = 1.0
-        # else:
-        #     self.anneal_cap = anneal_cap
 
     @property
     def _calculate_beta(self):
-        if self.model.training:
+        if self.model.training and self.annealing_beta:
             self.beta = min(self.beta + self.anneal_amount, self.anneal_cap)
         return self.beta
 
@@ -90,9 +105,11 @@ class MultiVAETrainer:
         KLD = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
         return CE + self._calculate_beta * KLD
 
-    def _train_step(self, batch):
+    def _train_step(self, user_batch):
         # add lr scheduler
-        batch = batch.to(self.device)
+        # batch = batch.to(self.device)
+        batch = torch.FloatTensor(self.sparse_train_input[user_batch[0]].toarray()).to(self.device)
+
         self.optimizer.zero_grad()
 
         output, mu, logvar = self.model.forward(batch)
@@ -103,15 +120,14 @@ class MultiVAETrainer:
 
         return loss.item()
 
-    def _validation_step(self, batch):
-        input, label = batch  # попробовать без девайс еще
-        input, label = input.to(self.device), label.to(self.device)
-        output, mu, logvar = self.model(input)  # мб сделать без возращения мю и вар
+    def _validation_step(self, user_batch, calculate_loss=True):
+        input = torch.FloatTensor(self.sparse_val_input[user_batch[0]].toarray()).to(self.device)
+        label = torch.FloatTensor(self.sparse_val_label[user_batch[0]].toarray()).to(self.device)
+        # input, label = batch  # попробовать без девайс еще
+        # input, label = input.to(self.device), label.to(self.device)
+        output, mu, logvar = self.model(input)
 
-        val_loss = self._calculate_loss(output, input, mu, logvar).item()
-        # output = output.to("cpu")
-
-        # output[input != 0] = -float("inf") # IMPORTANT: remove items that were in the input
+        output[input != 0] = -float("inf") # IMPORTANT: remove items that were in the input
         flatten_output = output.flatten().cpu()
         flatten_label = label.flatten().cpu()
         user_index = (
@@ -125,28 +141,36 @@ class MultiVAETrainer:
             flatten_output, flatten_label, indexes=user_index
         ).item()
 
-        return val_loss, metric
+        if calculate_loss:
+            val_loss = self._calculate_loss(output, input, mu, logvar).item()
+            return val_loss, metric
+
+        return metric
 
     # https://medium.com/@a0922/introduction-to-clearml-executing-in-google-colab-5485768cf6e9
-    def save_checkpoint(self):
+    def save_checkpoint(self, model_path="multivae.pth"):
         # ckpt_path = (
         #     cache_path
         #     / f"model_{model.info()}_optim_{optimizer_name}_acc_{accuracy:.4f}_epoch_{epoch_id}.ckpt"
         # )
         # torch.save(self.model.state_dict(), os.path.join(gettempdir(), "multivae.pt"))
-        print(f"***\n\nDir to dave model {os.getcwd()}")
+
         # torch.save(self.model.state_dict(), "multivae.pt")
         # torch.save(self.model.state_dict(), os.path.join(os.getcwd(), "multivae.pt"))
-        torch.save(self.model.state_dict(), os.path.join("models/ml-1m", "multivae.pt"))
+        torch.save(self.model.state_dict(), os.path.join("models/ml-1m/val3", model_path))
 
-    def train(self, train_loader, val_loader):
-        self.best_ndcg_metric = float("-inf")
+    def train(self, dataloader, train, val):
+        self.best_ndcg_metric = 0.0
+        self.best_ndcg_metric_for_beta = 0.0
+        self.sparse_train_input = train['input']
+        self.sparse_val_input = val['input']
+        self.sparse_val_label = val['label']
 
         for epoch in range(self.epochs_num):
             self.model.train()
 
             average_train_loss = 0
-            for batch_id, batch in enumerate(train_loader):
+            for batch_id, batch in enumerate(dataloader):
                 # batch = [x.to(self.device) for x in batch]
                 train_loss = self._train_step(batch)
                 average_train_loss += train_loss
@@ -154,49 +178,49 @@ class MultiVAETrainer:
             Logger.current_logger().report_scalar(
                 "Loss",
                 "Train",
-                value=average_train_loss / len(train_loader),
+                value=average_train_loss / len(dataloader),
                 iteration=epoch,
             )
-            # print(
-            #     "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
-            #         epoch,
-            #         batch_id,
-            #         len(train_loader),
-            #         100.0 * batch_id / len(train_loader),
-            #         train_loss,
-            #     )
-            # )
-            # train_debug_message = f"""Epoch[{epoch}] current loss:
-            #                     {train_loss:.5f}"""
-            # self.logger.debug(train_debug_message)
+            print(f'epoch = {epoch} loss={average_train_loss / len(dataloader)}')
 
             self.model.eval()
             with torch.no_grad():
                 # tqdm_dataloader = tqdm(self.val_loader)
                 average_val_loss, average_ndcg_metric = 0, 0
-                for batch_id, batch in enumerate(val_loader):
+                for batch_id, batch in enumerate(dataloader):
                     # batch = [x.to(self.device) for x in batch]
 
-                    current_val_loss, current_ndcg_metric = self._validation_step(batch)
+                    current_val_loss, current_ndcg_metric = self._validation_step(
+                        batch, calculate_loss=True
+                    )
 
                     average_val_loss += current_val_loss
                     average_ndcg_metric += current_ndcg_metric
 
-                    if self.finding_best_beta:
+                val_loss = average_val_loss / len(dataloader)
+                ndcg_metric = average_ndcg_metric / len(dataloader)
+
+                # if self.annealing_beta:
+                #     if self.best_ndcg_metric < ndcg_metric:
+                #         self.best_beta = self.beta
+                #         Logger.current_logger().report_scalar(
+                #             "Annealing beta",
+                #             "beta",
+                #             value=self.best_beta,
+                #             iteration=(epoch * len(val_loader) + batch_id),
+                #         )
+
+                if self.best_ndcg_metric < ndcg_metric:
+                    self.best_ndcg_metric = ndcg_metric
+                    self.save_checkpoint()
+                    if self.annealing_beta:
                         self.best_beta = self.beta
                         Logger.current_logger().report_scalar(
                             "Annealing beta",
                             "beta",
                             value=self.best_beta,
-                            iteration=(epoch * len(val_loader) + batch_id),
+                            iteration=epoch,
                         )
-
-                val_loss = average_val_loss / len(val_loader)
-                ndcg_metric = average_ndcg_metric / len(val_loader)
-
-                if self.best_ndcg_metric < ndcg_metric:
-                    self.best_ndcg_metric = ndcg_metric
-                    self.save_checkpoint()
 
                 Logger.current_logger().report_scalar(
                     "Loss",
@@ -205,36 +229,96 @@ class MultiVAETrainer:
                     iteration=epoch,
                 )
 
+
                 Logger.current_logger().report_scalar(
                     "Validation metric",
                     "NDCG@10",
                     value=ndcg_metric,
                     iteration=epoch,
                 )
+                print(f'epoch = {epoch} m={ndcg_metric}')
 
-                # print(
-                #     "Val Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\Metric: {:.6f}".format(
-                #         epoch,
-                #         batch_id,
-                #         len(val_loader),
-                #         100.0 * batch_id / len(val_loader),
-                #         val_loss,
-                #         ndcg_metric,
-                #     )
-                # )
-                # logging code
-
-        # valid_loss = 0
-        # with torch.no_grad():
-        #     for batch in valid_data_loader:
-        #         model_result = self._batch_pass(batch, self.model)
-        #         valid_loss += self._loss(**model_result)
-        #     valid_loss /= len(valid_data_loader)
-        #     valid_debug_message = f"""Epoch[{epoch}] validation
-        #                             average loss: {valid_loss:.5f}"""
-        #     self.logger.debug(valid_debug_message)
-        # return valid_loss.item()
+            if epoch == self.epochs_num - 1:
+                self.save_checkpoint("multivae_final.pth")
 
         ### в исходном коде сравнивают ндсж и сохраняют, если скор на валидации лучше.
         # в реплее сохраняют по лоссу на валидации (вроде менее логично, это же реконструкция)
         # в корецском сохраняют все, при подсчете метрик на валидации сохраняют бету
+
+    def _calculate_metrics(self, user_batch):
+        # input, label = batch  # попробовать без девайс еще
+        # input, label = input.to(self.device), label.to(self.device)
+        input = torch.FloatTensor(self.sparse_test_input[user_batch[0]].toarray()).to(self.device)
+        label = torch.FloatTensor(self.sparse_test_label[user_batch[0]].toarray()).to(self.device)
+
+        output, _, _ = self.model(input)
+
+        output[input != 0] = -float("inf") # IMPORTANT: remove items that were in the input
+        flatten_output = output.flatten().cpu()
+        flatten_label = label.flatten().cpu()
+        user_index = (
+            torch.arange(output.size(0), dtype=torch.long)
+            .unsqueeze(1)
+            .expand(-1, output.size(1))
+            .flatten()
+        )
+        self.metrics.update(flatten_output, flatten_label, user_index)
+        # return 
+        return self.metrics(flatten_output, flatten_label, user_index)
+
+    def test(self, dataloader, test, ks: Sequence[int], model_path=None):
+        self.sparse_test_input = test['input']
+        self.sparse_test_label = test['label']
+
+        if model_path is None:
+            model_path = os.path.join("models/ml-1m/val3", "multivae.pth")
+
+        checkpoint = torch.load(model_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint)
+
+        self.ks = ks
+        metrics = MetricCollection(
+            [MetricCollection(
+                    [
+                        RetrievalNormalizedDCG(top_k=k),
+                        RetrievalRecall(top_k=k),
+                        RetrievalPrecision(top_k=k),
+                    ],
+                    postfix=f"@{k}",
+                )
+                for k in ks
+            ]
+        )
+
+        # self.metrics = metrics.to(self.device)
+        self.metrics = metrics
+        self.model.eval()
+
+        with torch.no_grad():
+            # result_metrics = {k : 0 for k in metrics.keys(keep_base=True)}
+            avg, avg10 = 0, 0
+            for batch in dataloader:
+                current_metrics = self._calculate_metrics(batch)
+                avg += current_metrics['RetrievalNormalizedDCG@1']
+                avg10 += current_metrics['RetrievalNormalizedDCG@10']
+                print(current_metrics)
+                # result_metrics = {k: result_metrics[k] + current_metrics[k] for k in result_metrics}
+
+            # result_metrics = {k: result_metrics[k] / len(dataloader) for k in result_metrics}
+
+            result_metrics = self.metrics.compute()
+            print(result_metrics)
+            avg = avg / len(dataloader)
+            avg10 = avg10 / len(dataloader)
+            Logger.current_logger().report_single_value(name='RetrievalNormalizedDCG@1', value=avg)
+            Logger.current_logger().report_single_value(name='RetrievalNormalizedDCG@10', value=avg10)
+            for metric, value in result_metrics.items():
+                Logger.current_logger().report_single_value(name=metric, value=value)
+
+            print(avg, avg10)
+            print(result_metrics['RetrievalNormalizedDCG@1'], result_metrics['RetrievalNormalizedDCG@10'])
+            
+            # убрать тензоры
+            # with open(os.path.join("models/ml-1m/val", 'test_metrics.json'), 'w') as f:
+            #     json.dump(result_metrics, f, indent=6)
+

@@ -3,21 +3,27 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
+import torch
 from torch import FloatTensor
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.datasets import BaseDataset
 
 
-# абстрактный класс ?
-class VAEDataLoader:
-    def __init__(self, train_batch_size, test_batch_size=None):
-        self.train_batch_size = train_batch_size
+# class TrainLoader:
+#     def __init__(self, )
 
-        if test_batch_size is None:
-            self.test_batch_size = train_batch_size
-        else:
-            self.test_batch_size = test_batch_size
+
+class VAEDataLoader:
+    # def __init__(self, train_batch_size, test_batch_size=None):
+    #     self.train_batch_size = train_batch_size
+
+    #     if test_batch_size is None:
+    #         self.test_batch_size = train_batch_size
+    #     else:
+    #         self.test_batch_size = test_batch_size
+    def __init__(self, batch_size):
+        self.batch_size = batch_size
 
         # # For autoencoders, we should remove users from val/test sets
         # # that rated items NOT in the training set
@@ -61,11 +67,29 @@ class VAEDataLoader:
 
         train, val, test = self._split(interactions)
 
-        train_dataloader = self._get_train_dataloader(train)
-        val_dataloader = self._get_val_test_dataloader(val, validate=True)
-        test_dataloader = self._get_val_test_dataloader(test, validate=False)
+        # train_dataloader = self._get_train_dataloader(train)
+        # val_dataloader = self._get_val_test_dataloader(val, validate=True)
+        # test_dataloader = self._get_val_test_dataloader(test, validate=False)
+        
+        # return train_dataloader, val_dataloader, test_dataloader
 
-        return train_dataloader, val_dataloader, test_dataloader
+        dataloader = DataLoader(
+            TensorDataset(torch.arange(self.unique_user_num)),
+            batch_size=self.batch_size,
+            # batch_size=self.train_batch_size,
+            shuffle=False,
+        )
+
+        sparse_train = self._get_train_dataloader(train)
+        sparse_val = self._get_val_test_dataloader(val, validate=True)
+        sparse_test = self._get_val_test_dataloader(test, validate=False)
+
+        sparse_interactions = {'train' : sparse_train, 'val' : sparse_val, 'test' : sparse_test}
+
+        # return {'item_num' : self.unique_item_num, 
+        #     'dataloader' : dataloader, 
+        # 
+        return self.unique_item_num, dataloader, sparse_interactions
 
     # add val and test size (proportion)
     def _split(
@@ -92,19 +116,7 @@ class VAEDataLoader:
 
         return train, val, test
 
-    def _get_train_dataloader(self, interactions_grouped):
-        # exploded_items = items_grouped_by_user.explode()
-
-        # user_index = exploded_items.index.to_numpy()
-        # item_index = exploded_items.values.to_numpy()
-
-        # assert len(user_index) == len(item_index)
-
-        # sparse_dataset = csr_matrix(
-        #     (np.ones(len(user_index)), (user_index, item_index)),
-        #     shape=(self.unique_user_num, self.unique_item_num),
-        # )
-        # user_num = train["user_id"].shape[0]
+    def _get_train_dataloader(self, interactions_grouped): 
 
         interactions_exploaded = interactions_grouped.explode("input_item_id")
 
@@ -120,13 +132,13 @@ class VAEDataLoader:
             shape=(self.unique_user_num, self.unique_item_num),
         )
 
-        dataloader = DataLoader(
-            FloatTensor(sparse_interactions.toarray()),
-            batch_size=self.train_batch_size,
-            shuffle=True,
-        )
-
-        return dataloader
+        # dataloader = DataLoader(
+        #     FloatTensor(sparse_interactions.toarray()),
+        #     batch_size=self.train_batch_size,
+        #     shuffle=True,
+        # )
+        
+        return {'input' : sparse_interactions}
 
     def _get_val_test_dataloader(self, interactions_grouped, validate=True):
         user_label_index = (
@@ -160,17 +172,17 @@ class VAEDataLoader:
             shape=(self.unique_user_num, self.unique_item_num),
         )
 
-        if validate:
-            batch_size = self.train_batch_size
-        else:
-            batch_size = self.test_batch_size
+        # if validate:
+        #     batch_size = self.train_batch_size
+        # else:
+        #     batch_size = self.test_batch_size
 
-        dataloader = DataLoader(
-            TensorDataset(
-                FloatTensor(sparse_input.toarray()), FloatTensor(sparse_label.toarray())
-            ),
-            batch_size=batch_size,
-            shuffle=False,
-        )
+        # dataloader = DataLoader(
+        #     TensorDataset(
+        #         FloatTensor(sparse_input.toarray()), FloatTensor(sparse_label.toarray())
+        #     ),
+        #     batch_size=batch_size,
+        #     shuffle=False,
+        # )
 
-        return dataloader
+        return {'input' : sparse_input, 'label' : sparse_label}
