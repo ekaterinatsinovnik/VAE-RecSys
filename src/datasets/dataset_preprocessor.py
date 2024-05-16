@@ -1,20 +1,25 @@
 import os
 import pickle
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple
 
 import pandas as pd
 
 DATASET_ROOT_PATH = "data"
-# PROCESSED_DATASET_PATH = "processed.pickle"
 PROCESSED_DATASET_PATH = "processed"
 
 
-class BaseDataset:
-    def __init__(self, args: dict) -> None:
-        self.dataset_shortname = args["dataset_shortname"]
-        self.min_rating = args["min_rating"]
-        self.min_user_count = args["min_user_count"]
-        self.min_item_count = args["min_item_count"]
+class DatasetPreprocessor:
+    def __init__(
+        self,
+        dataset_shortname: str,
+        min_rating: float = 3.5,
+        min_user_count: int = 5,
+        min_item_count: int = 0,
+    ) -> None:
+        self.dataset_shortname = dataset_shortname
+        self.min_rating = min_rating
+        self.min_user_count = min_user_count
+        self.min_item_count = min_item_count
 
         self.data_path = self._get_data_common_path()
 
@@ -72,41 +77,13 @@ class BaseDataset:
 
         return interactions, user_mapping, item_mapping
 
-    # def _split(
-    #     self, interactions: pd.DataFrame, num_users: int
-    # ) -> Tuple[dict, dict, dict]:
-
-    #     sorted_items = interactions.groupby("user_id").apply(
-    #         lambda d: list(d.sort_values(by="timestamp")["item_id"]),
-    #         include_groups=False,
-    #     )
-
-    #     train, val, test = {}, {}, {}
-    #     for user in range(num_users):
-    #         items = sorted_items[user]
-    #         train[user], val[user], test[user] = items[:-2], items[-2:-1], items[-1:]
-
-    #     return train, val, test
-
-    def _to_sparse_matrix(self, dataframe):
-        pass
-
-    def _filter(self) -> Dict[str, Union[pd.DataFrame, Dict[int, int]]]:
+    def _filter(self) -> Tuple[pd.DataFrame, Dict[str, Dict[int, int]]]:
         interactions = self._load_raw_dataset()
 
         interactions = self._filter_by_min_rating(interactions)
         interactions = self._filter_triplets(interactions)
 
         interactions, user_mapping, item_mapping = self._encode_ids(interactions)
-
-        # train, val, test = self._split(interactions, len(user_mapping))
-        # dataset = {
-        #     "train": train,
-        #     "val": val,
-        #     "test": test,
-        #     "user_mapping": user_mapping,
-        #     "item_mapping": item_mapping,
-        # }
 
         mapping = {
             "user_mapping": user_mapping,
@@ -118,13 +95,8 @@ class BaseDataset:
     def preprocess(self) -> None:
         processed_data_path = os.path.join(self.data_path, PROCESSED_DATASET_PATH)
         os.mkdir(processed_data_path)
-        # if os.path.exists(processed_data_path):
-        #     raise FileExistsError()  # should use it?
 
         preprocessed_interactions, mapping = self._filter()
-
-        # with open(processed_data_path, "wb") as f:
-        #     pickle.dump(preprocessed_data, f)
 
         preprocessed_interactions.to_parquet(
             os.path.join(processed_data_path, "interactions.parquet"), index=False
@@ -133,7 +105,7 @@ class BaseDataset:
         with open(os.path.join(processed_data_path, "mapping.pickle"), "wb") as f:
             pickle.dump(mapping, f)
 
-    def load_dataset(self) -> Dict[str, Union[pd.DataFrame, Dict[int, int]]]:
+    def load_dataset(self) -> pd.DataFrame:
         processed_data_path = os.path.join(self.data_path, PROCESSED_DATASET_PATH)
 
         if not os.path.exists(processed_data_path):

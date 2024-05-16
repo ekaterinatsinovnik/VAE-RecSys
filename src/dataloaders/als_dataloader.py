@@ -1,31 +1,71 @@
+from typing import Tuple
+
 import numpy as np
+import pandas as pd
 from scipy.sparse import csr_matrix
-from sklearn.preprocessing import LabelEncoder
 
 from .base_dataloader import BaseDataloader
 
 
-class ALSLoader(BaseDataloader):
-    def make_sparse(self, grouped_ratings):
-        ratings = grouped_ratings.explode()
+class ALSDataLoader(BaseDataloader):
+    def get_dataloaders(self) -> Tuple[csr_matrix, pd.DataFrame]:
+        self.unique_user_num = self.interactions["user_id"].nunique()
+        self.unique_item_num = self.interactions["item_id"].nunique()
 
-        user_encoder = LabelEncoder()
-        user_index = user_encoder.fit_transform(ratings.index.to_numpy())
+        train_df, test_df = self._split()
 
-        item_encoder = LabelEncoder()
-        item_index = item_encoder.fit_transform(ratings.values)
+        sparse_train = self._convert_to_sparse(train_df)
 
-        user_num = len(grouped_ratings)
-        item_num = len(np.unique(item_index))
+        return sparse_train, test_df
 
-        sparse_matrix = csr_matrix(
-            (np.ones(len(user_index)), (user_index, item_index)),
-            shape=(user_num, item_num),
+    def _split(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        train = (
+            self.sorted_items_to_split.apply(
+                lambda row: row.iloc[:-1], include_groups=False
+            )
+            .reset_index()
+            .drop(columns=["level_1"])
         )
 
-        return sparse_matrix, user_encoder, item_encoder
+        test = (
+            self.sorted_items_to_split.apply(
+                lambda row: row.iloc[-1:], include_groups=False
+            )
+            .reset_index()
+            .drop(columns=["level_1"])
+        )
 
-    def load_dataset(self):
-        train_csr, user_encoder, item_encoder = self.make_sparse(self.train)
-        ground_truth = self.val.explode()
-        return train_csr, user_encoder, item_encoder, ground_truth
+        return train, test
+
+    @staticmethod
+    def _encode_tfidf(interactions: pd.DataFrame) -> pd.DataFrame:
+
+        rating_sum_per_user = interactions.groupby("user_id")["rating"].transform("sum")
+        user_count_per_element = interactions.groupby("item_id")["user_id"].transform("size")
+        
+        tf = interactions["rating"].values / rating_sum_per_user.values
+        idf = np.log(len(rating_sum_per_user) / user_count_per_element.values)
+
+        tfidf_values = tf * idf
+
+        return tfidf_values
+    
+    def _convert_to_sparse(self, interactions_df, use_tfidf=True) -> csr_matrix:
+        if use_tfidf:
+            sparse_matrix_values = self._encode_tfidf(interactions_df)
+        else:
+            sparse_matrix_values = np.ones(interactions_df.shape[0])
+
+        user_index = interactions_df["user_id"].astype("category").cat.codes.values
+        item_index = interactions_df["item_id"].values
+        assert len(user_index) == len(item_index)
+
+        sparse_interactions = csr_matrix(
+            (
+                sparse_matrix_values,
+                ([user_index, item_index]),
+            ),
+            shape=(self.unique_user_num, self.unique_item_num),
+        )
+
+        return sparse_interactions

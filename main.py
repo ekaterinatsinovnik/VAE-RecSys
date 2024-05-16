@@ -12,14 +12,15 @@ def main():
         project_name="VAE-RecSys",
         task_name="vae_test",
         task_type="training",
-        auto_connect_frameworks={"pytorch": ['*.pth']},
+        auto_connect_frameworks={"pytorch": ['*.pth'], "detect_repository": False},
         output_uri="models",  # сделать проверку на существование директории и создатть, если нет
         # /home/kate/drive/files/diploma/VAE-RecSys/logs
         tags=["ml-1m"],
-        auto_connect_streams={"stdout": True, "stderr": True, "logging": True},
-        # auto_resource_monitoring=False
+        auto_connect_streams={"stdout": False, "stderr": False, "logging": True},
+        auto_resource_monitoring=False
     )
     task.name += " {}".format(task.id)
+    
 
     args = {
         "dataset_shortname": "ml_1m",
@@ -28,14 +29,23 @@ def main():
         "min_item_count": 0,
     }
 
-    loader = VAEDataLoader(batch_size=512)
+    # loader = VAEDataLoader(**args, val_size=0.1, test_size=0.1, batch_size=128)
+    loader = VAEDataLoader(**args, val_size=1, test_size=1, batch_size=128)
     task.connect(loader)
-    item_num, dataloader, interactions = loader.get_dataloaders(**args)
+    dataloader, interactions = loader.get_dataloaders()
 
-    trainer = MultiVAETrainer(item_num, beta=None, epochs_num=5)
+    item_num = interactions['train'].shape[1]
+    trainer = MultiVAETrainer(item_num, dropout=0.22, learning_rate=0.01, weight_decay= 0.01, beta=0.342, epochs_num=50)
+    # trainer = MultiVAETrainer(item_num, dropout=0.5, beta=0.342, learning_rate=0.001, 
+    #     weight_decay= 0.01, epochs_num=200, total_anneal_steps = 3000, num_hidden = 2)
     task.connect(trainer)
+#     print(task.get_parameters())
+# 'General/batch_size'
+# 'General/latent_dim': '200', 'General/hidden_dim'
+# 'General/num_hidden': '1', 'General/dropout': '0.1', 'General/learning_rate': '0.002', 'General/epochs_num':
     trainer.train(dataloader, interactions['train'], interactions['val'])
     trainer.test(dataloader, interactions['test'], ks=[1, 5, 10, 20])
+    # trainer.test(dataloader, interactions['test'], ks=[1, 5, 10, 20], model_path="models/ml-1m/val3/multivae_final.pth")
 
     task.close()
 
