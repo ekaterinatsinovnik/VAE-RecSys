@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,15 +7,22 @@ import torch.nn.functional as F
 
 class MultiVAE(nn.Module):
     def __init__(
-        self, item_num, latent_dim=200, num_hidden=1, hidden_dim=600, dropout=0.1
-    ):
-        """_summary_
+        self,
+        item_num: int,
+        latent_dim: int = 200,
+        num_hidden: int = 1,
+        hidden_dim: int = 600,
+        dropout: float = 0.5,
+    ) -> None:
+        """MultVAE implementation (Variational Autoencoders for Collaborative Filtering)
+            https://arxiv.org/abs/1802.05814
 
         Args:
-            item_num : number of items
-            latent_dim : dimension of the latent representation
-            hidden_dim : dimension of hidden layers in encoder and decoder MLP layers
-            num_hidden : number of hidden layers in each encoder and decoder MLP layers
+            item_num (int): Number of items.
+            latent_dim (int, optional): Dimension of the latent representation. Defaults to 200.
+            num_hidden (int, optional): Number of hidden layers in each encoder and decoder MLP layers. Defaults to 1.
+            hidden_dim (int, optional): Dimension of hidden layers in encoder and decoder MLP layers. Defaults to 600.
+            dropout (float, optional): Defaults to 0.1.
 
         """
 
@@ -47,7 +56,7 @@ class MultiVAE(nn.Module):
         for layer in self.decoder:
             self._init_weight(layer)
 
-    def _init_weight(self, layer):
+    def _init_weight(self, layer : nn.Linear) -> None:
         """
         Xavier initialization
 
@@ -95,7 +104,7 @@ class MultiVAE(nn.Module):
 
         return self.decoder[-1](hidden)
 
-    def forward(self, batch):
+    def forward(self, batch : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(batch)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar

@@ -9,8 +9,6 @@ from .base_dataloader import BaseDataloader
 
 class ALSDataLoader(BaseDataloader):
     def get_dataloaders(self) -> Tuple[csr_matrix, pd.DataFrame]:
-        self.unique_user_num = self.interactions["user_id"].nunique()
-        self.unique_item_num = self.interactions["item_id"].nunique()
 
         train_df, test_df = self._split()
 
@@ -18,21 +16,38 @@ class ALSDataLoader(BaseDataloader):
 
         return sparse_train, test_df
 
-    def _split(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        train = (
-            self.sorted_items_to_split.apply(
-                lambda row: row.iloc[:-1], include_groups=False
-            )
+    def _process_to_split(self, func_to_apply: callable) -> pd.DataFrame: 
+        return (
+            self.sorted_items_to_split.apply(func_to_apply, include_groups=False)
             .reset_index()
             .drop(columns=["level_1"])
         )
 
-        test = (
-            self.sorted_items_to_split.apply(
-                lambda row: row.iloc[-1:], include_groups=False
+    def _split(self) -> callable:
+        if isinstance(self.test_size, float):
+            return self._split_by_ratio()
+        else:
+            return self._split_by_const()
+
+    def _split_by_const(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        train = self._process_to_split(
+                lambda row: row.iloc[:-self.test_size]
             )
-            .reset_index()
-            .drop(columns=["level_1"])
+        test = self._process_to_split(
+                lambda row: row.iloc[-self.test_size:]
+        )
+
+        return train, test
+
+    def _split_by_ratio(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        def bound(row, ratio):
+            return np.ceil(len(row) * ratio).astype("int")
+
+        train = self._process_to_split(
+            lambda row: row.iloc[: -bound(row, self.test_size)]
+        )
+        test = self._process_to_split(
+            lambda row: row.iloc[-bound(row, self.test_size):]
         )
 
         return train, test
@@ -50,7 +65,7 @@ class ALSDataLoader(BaseDataloader):
 
         return tfidf_values
     
-    def _convert_to_sparse(self, interactions_df, use_tfidf=True) -> csr_matrix:
+    def _convert_to_sparse(self, interactions_df: pd.DataFrame, use_tfidf: bool = True) -> csr_matrix:
         if use_tfidf:
             sparse_matrix_values = self._encode_tfidf(interactions_df)
         else:

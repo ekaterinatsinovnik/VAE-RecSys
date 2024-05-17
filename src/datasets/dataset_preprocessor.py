@@ -92,11 +92,9 @@ class DatasetPreprocessor:
 
         return interactions, mapping
 
-    def preprocess(self) -> None:
-        processed_data_path = os.path.join(self.data_path, PROCESSED_DATASET_PATH)
-        os.mkdir(processed_data_path)
-
+    def preprocess(self, processed_data_path) -> None:
         preprocessed_interactions, mapping = self._filter()
+        os.mkdir(processed_data_path)
 
         preprocessed_interactions.to_parquet(
             os.path.join(processed_data_path, "interactions.parquet"), index=False
@@ -109,7 +107,7 @@ class DatasetPreprocessor:
         processed_data_path = os.path.join(self.data_path, PROCESSED_DATASET_PATH)
 
         if not os.path.exists(processed_data_path):
-            self.preprocess()
+            self.preprocess(processed_data_path)
 
         interactions = pd.read_parquet(
             os.path.join(processed_data_path, "interactions.parquet")

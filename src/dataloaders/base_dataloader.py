@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-
+from typing import Union
 
 from src.datasets import DatasetPreprocessor
 
@@ -7,13 +7,19 @@ from src.datasets import DatasetPreprocessor
 class BaseDataloader(ABC):
     def __init__(
         self,
-        dataset_shortname: str,
+        dataset: str,
         min_rating: float = 3.5,
         min_user_count: int = 5,
         min_item_count: int = 0,
+        val_size: Union[float, int] = 1,
+        test_size: Union[float, int] = 1,
     ) -> None:
+
+        self.val_size = val_size + test_size
+        self.test_size = test_size
+
         data = DatasetPreprocessor(
-            dataset_shortname=dataset_shortname,
+            dataset_shortname=dataset,
             min_rating=min_rating,
             min_user_count=min_user_count,
             min_item_count=min_item_count,
@@ -27,10 +33,6 @@ class BaseDataloader(ABC):
 
         self.unique_user_num = interactions["user_id"].nunique()
         self.unique_item_num = interactions["item_id"].nunique()
-
-    @abstractmethod
-    def _convert_to_sparse(self):
-        pass
 
     @abstractmethod
     def get_dataloaders(self):
