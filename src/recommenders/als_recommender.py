@@ -1,37 +1,49 @@
+import os
+from typing import Union
+
 import pandas as pd
 from implicit.als import AlternatingLeastSquares
 from scipy.sparse import csr_matrix
 
 from .metrics import compute_metrics
+from .base_recommender import BaseRecommender
 
 
-class ALSRecommender:
+class ALSRecommender(BaseRecommender):
     def __init__(
         self,
-        dataset_shortname,
-        factors = 100,
-        regularization= 0.01,
-        alpha=1.0,
-        iterations= 15,
-        random_state=7,
- 
-    ):
+        dataset: str,
+        factors:int = 100,
+        regularization: float = 0.01,
+        alpha: float = 1.0,
+        iterations: int = 15,
+        random_state: int = 0,
+        model_path: Union[str, None] = None
+    ) -> None:
+
         self.model = AlternatingLeastSquares(
             factors, regularization, alpha, iterations, random_state
         )
         self.model_trained = False
-        self.dataset_shortname = dataset_shortname
+        self.dataset = dataset
 
-    def train(self, train: csr_matrix, save_model: bool = True):
+        if model_path is None:
+            model_path = f"models/{self.dataset}"
+
+        if not os.path.exists(model_path):
+            os.mkdir(model_path)
+        self.model_path = os.path.join(model_path, "als.npz")
+
+    def train(self, train: csr_matrix):
         self.model.fit(train)
         self.model_trained = True
 
-        if save_model:
-            self.mode.save("als.npz")
+        if self.model_path is not None:
+            self.mode.save(self.model_path)
 
-    def test(self, train, test, ks, model_path="models/als/ml_1m.npz"):
+    def test(self, train, test, ks):
         if not self.model_trained:
-            self.model = self.model.load(model_path)
+            self.model = self.model.load(self.model_path)
 
         recommendations_matrix, _ = self.model.recommend(
             train["user_id"].unique(), train, N=max(ks), filter_already_liked_items=True
@@ -55,4 +67,4 @@ class ALSRecommender:
         metrics = compute_metrics(labelled_recommendations, ks)
 
         metrics_df = pd.DataFrame(metrics, index=[0])
-        metrics_df.to_csv(f"als_{self.dataset_shortname}_metrics.csv")
+        metrics_df.to_csv(os.join(self.model_path, "metrics.csv"))

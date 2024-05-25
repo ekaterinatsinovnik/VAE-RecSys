@@ -3,18 +3,19 @@ from rectools import Columns
 from rectools.models import EASEModel
 
 from .metrics import compute_metrics
+from .base_recommender import BaseRecommender
 
 
-class EASERecommender:
+class EASERecommender(BaseRecommender):
     def __init__(
         self,
-        dataset_shortname,
+        dataset,
         regularization=500.0,
         num_threads=10,
     ):
         self.model = EASEModel(regularization, num_threads)
         self.model_trained = False
-        self.dataset_shortname = dataset_shortname
+        self.dataset = dataset
 
     def train(self, train):
         self.model.fit(train)
@@ -48,4 +49,4 @@ class EASERecommender:
         metrics = compute_metrics(labelled_recommendations, ks)
 
         metrics_df = pd.DataFrame(metrics, index=[0])
-        metrics_df.to_csv(f"ease_{self.dataset_shortname}_metrics.csv")
+        metrics_df.to_csv(f"{self.dataset}/ease_metrics.csv")

@@ -23,11 +23,11 @@ class VAEDataLoader(BaseDataloader):
         super().__init__(dataset, min_rating, min_user_count, min_item_count)
         self.batch_size = batch_size
 
-    def get_dataloaders(self) -> Tuple[DataLoader, dict]:
+    def get_dataloaders(self) -> Tuple[DataLoader, dict, int]:
         dataloader = DataLoader(
             TensorDataset(torch.arange(self.unique_user_num)),
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=False
         )
 
         train_val_input, val_label, test_input, test_label = self._split()
@@ -47,11 +47,11 @@ class VAEDataLoader(BaseDataloader):
             "test": sparse_test,
         }
 
-        return dataloader, sparse_interactions
+        return dataloader, sparse_interactions, sparse_train.shape[1]
 
     def _convert_to_sparse(self, interactions_df: pd.DataFrame) -> csr_matrix:
-        user_index = interactions_df["user_id"].values
-        item_index = interactions_df["item_id"].values
+        user_index = interactions_df["user_id"].astype('category').cat.codes.values
+        item_index = interactions_df["item_id"].astype('category').cat.codes.values
         assert len(user_index) == len(item_index)
 
         sparse_interactions = csr_matrix(
