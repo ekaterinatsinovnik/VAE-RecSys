@@ -49,6 +49,8 @@ class MultiVAE(nn.Module):
         )
 
         self.dropout = nn.Dropout(p=dropout)
+        self.activation = nn.Tanh()
+        # self.activation = nn.ReLU()
 
         for layer in self.encoder:
             self._init_weight(layer)
@@ -61,22 +63,27 @@ class MultiVAE(nn.Module):
         Xavier initialization
 
         Args:
-            layer: layer of a model
+            layer (nn.Linear): layer of a model
         """
         if isinstance(layer, nn.Linear):
             nn.init.xavier_normal_(layer.weight.data)
+            # nn.init.kaiming_normal_(layer.weight.data)
             layer.bias.data.normal_(0.0, 0.001)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encoder
+
+        Args:
+            x (torch.Tensor): model input
+        """
+
         hidden = F.normalize(x, p=2, dim=1)
-        print(hidden)
         hidden = self.dropout(hidden)
-        print(hidden)
 
         for layer in self.encoder[:-1]:
             hidden = layer(hidden)
-            print(hidden)
-            hidden = torch.tanh(hidden)
+            hidden = self.activation(hidden)
 
         hidden = self.encoder[-1](hidden)
 
@@ -86,7 +93,13 @@ class MultiVAE(nn.Module):
         return mu, logvar
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """Reparametrization trick"""
+        """
+        Reparametrization trick
+        
+        Args:
+            mu (torch.Tensor): math expectation estimation
+            logvar (torch.Tensor): logarithmic variation estimation
+        """
 
         if self.training:
             std = torch.exp(0.5 * logvar)
@@ -96,11 +109,18 @@ class MultiVAE(nn.Module):
         return mu
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Decoder
+
+        Args:
+            z (torch.Tensor): normal dustributed tensor sampled from latent representation
+        """
+
         hidden = z
 
         for layer in self.decoder[:-1]:
             hidden = layer(hidden)
-            hidden = torch.tanh(hidden)
+            hidden = self.activation(hidden)
 
         return self.decoder[-1](hidden)
 

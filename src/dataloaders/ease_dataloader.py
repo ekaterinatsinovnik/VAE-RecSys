@@ -9,7 +9,7 @@ from .base_dataloader import BaseDataloader
 
 
 class EASEDataLoader(BaseDataloader):
-    def get_dataloaders(self) -> Tuple[csr_matrix, pd.DataFrame]:
+    def get_dataloaders(self) -> Tuple[csr_matrix, pd.DataFrame, int]:
 
         train_df, test_df = self._split()
 
@@ -17,7 +17,7 @@ class EASEDataLoader(BaseDataloader):
 
         train = Dataset.construct(train_df)
 
-        return train, test_df
+        return train, test_df, test_df.item_id.nunique()
 
     def _split(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         train = (

@@ -1,9 +1,10 @@
 from typing import Dict, Sequence, Union
+import os
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from clearml import Logger
+from clearml import Logger, Task
 from scipy.sparse import csr_matrix
 from torchmetrics import MetricCollection
 from torchmetrics.retrieval import (RetrievalNormalizedDCG, 
@@ -11,9 +12,10 @@ from torchmetrics.retrieval import (RetrievalNormalizedDCG,
                                     RetrievalRecall)
 
 from src.models import MultiVAE
+from .base_recommender import BaseRecommender
 
 
-class MultiVAERecommender:
+class MultiVAERecommender(BaseRecommender):
     def __init__(
         self,
         item_num: int,
@@ -61,6 +63,10 @@ class MultiVAERecommender:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dataset = dataset
 
+        self.model_root_path = f"models/{self.dataset}/{Task.current_task().id}"
+        if not os.path.exists(self.model_root_path):
+            os.mkdir(self.model_root_path)
+
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.num_hidden = num_hidden
@@ -86,6 +92,7 @@ class MultiVAERecommender:
         self.k = k
 
         self.anneal_amount = 1.0 / total_anneal_steps
+        self.total_anneal_steps = total_anneal_steps
         if isinstance(beta, (float, int)):
             self.beta = beta
             self.annealing_beta = False
@@ -140,16 +147,16 @@ class MultiVAERecommender:
         output, mu, logvar = self.model(input)
 
         output[input != 0] = -float("inf")
-        flatten_output = output.flatten().cpu()
-        flatten_label = label.flatten().cpu()
+        flatten_output = output.flatten()
+        flatten_label = label.flatten()
         user_index = (
             torch.arange(output.size(0), dtype=torch.long)
             .unsqueeze(1)
             .expand(-1, output.size(1))
             .flatten()
-        )
+        ).to(self.device)
 
-        ndcg = RetrievalNormalizedDCG(top_k=self.k)
+        ndcg = RetrievalNormalizedDCG(top_k=self.k).to(self.device)
         metric = ndcg(flatten_output, flatten_label, indexes=user_index).item()
 
         if calculate_loss:
@@ -158,23 +165,22 @@ class MultiVAERecommender:
 
         return metric
 
-    def save_checkpoint(self, path_to_save: str = None) -> None:
-        if path_to_save is None:
-            path_to_save = f"models/{self.dataset}/best_multivae.pth"
+    def save_checkpoint(self, model_name_to_save: str = None) -> None:
+        if model_name_to_save is None:
+            model_name_to_save = "best_multivae.pth"
 
-        torch.save(self.model.state_dict(), path_to_save)
+        torch.save(self.model.state_dict(), os.path.join(self.model_root_path, model_name_to_save))
 
     def train(
         self,
         dataloader: torch.utils.data.DataLoader,
-        train: csr_matrix,
-        val: Dict[str, csr_matrix],
+        interactions_dict: dict
     ) -> None:
         self.best_ndcg_metric = 0.0
         self.best_ndcg_metric_for_beta = 0.0
-        self.sparse_train_input = train
-        self.sparse_val_input = val["input"]
-        self.sparse_val_label = val["label"]
+        self.sparse_train_input = interactions_dict['train']
+        self.sparse_val_input = interactions_dict["val"]["input"]
+        self.sparse_val_label = interactions_dict["val"]["label"]
 
         for epoch in range(self.epochs_num):
             self.model.train()
@@ -194,11 +200,11 @@ class MultiVAERecommender:
                 value=average_train_loss,
                 iteration=epoch,
             )
-            print(f"Epoch = {epoch}: Loss={average_train_loss}")
+            print(f"Epoch = {epoch}: Loss = {average_train_loss}")
 
             self.model.eval()
             with torch.no_grad():
-                average_ndcg_metric = 0, 0
+                average_ndcg_metric = 0.
                 for batch_id, batch in enumerate(dataloader):
                     current_ndcg_metric = self._validation_step(batch)
 
@@ -208,6 +214,7 @@ class MultiVAERecommender:
 
                 if self.best_ndcg_metric < ndcg_metric:
                     self.best_ndcg_metric = ndcg_metric
+                    self.save_checkpoint(f"best_{epoch}_epoch_multivae.pth")
                     self.save_checkpoint()
 
                     if self.annealing_beta:
@@ -225,10 +232,13 @@ class MultiVAERecommender:
                     value=ndcg_metric,
                     iteration=epoch,
                 )
-                print(f"Epoch = {epoch}: NDCG@10 = {ndcg_metric}")
+                print(f"Epoch = {epoch}: NDCG@10 = {ndcg_metric}.:4f")
+
+            if epoch % 5 == 0 and epoch > 0:
+                self.save_checkpoint(f"{epoch}_epoch_multivae.pth")
 
             if epoch == self.epochs_num - 1:
-                self.save_checkpoint(f"models/{self.dataset}/final_multivae.pth")
+                self.save_checkpoint("final_multivae.pth")
 
     def _calculate_metrics(self, user_batch: torch.Tensor) -> Dict[str, torch.Tensor]:
         input = torch.FloatTensor(self.sparse_test_input[user_batch[0]].toarray()).to(
@@ -258,14 +268,23 @@ class MultiVAERecommender:
         dataloader: torch.utils.data.DataLoader,
         test: Dict[str, csr_matrix],
         ks: Sequence[int],
-        path_to_load: str,
+        model_name_to_load: str = None,
+        model_path_to_load: str = None
     ) -> None:
         self.sparse_test_input = test["input"]
         self.sparse_test_label = test["label"]
 
-        if path_to_load is None:
-            path_to_load = "models/{self.dataset}/best_multivae.pth"
+        if model_name_to_load is None and model_path_to_load is not None:
+            path_to_load = model_path_to_load
 
+        elif model_path_to_load is None:
+            if model_name_to_load is None:
+                model_name_to_load = "best_multivae.pth"
+            path_to_load = os.path.join(self.model_root_path, model_name_to_load)
+        else:
+            raise ValueError("Path for loading model is invalid.")
+
+            
         checkpoint = torch.load(path_to_load, map_location=self.device)
         self.model.load_state_dict(checkpoint)
 
@@ -285,7 +304,6 @@ class MultiVAERecommender:
         )
 
         self.metrics = metrics.to(self.device)
-        # self.metrics = metrics
 
         self.model.eval()
         with torch.no_grad():

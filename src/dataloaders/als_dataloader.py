@@ -8,13 +8,13 @@ from .base_dataloader import BaseDataloader
 
 
 class ALSDataLoader(BaseDataloader):
-    def get_dataloaders(self) -> Tuple[csr_matrix, pd.DataFrame]:
+    def get_dataloaders(self, use_tfidf=False) -> Tuple[csr_matrix, pd.DataFrame, int]:
 
         train_df, test_df = self._split()
 
         sparse_train = self._convert_to_sparse(train_df)
 
-        return sparse_train, test_df
+        return sparse_train, test_df, sparse_train.shape[1]
 
     def _process_to_split(self, func_to_apply: callable) -> pd.DataFrame: 
         return (
@@ -72,7 +72,7 @@ class ALSDataLoader(BaseDataloader):
             sparse_matrix_values = np.ones(interactions_df.shape[0])
 
         user_index = interactions_df["user_id"].astype("category").cat.codes.values
-        item_index = interactions_df["item_id"].values
+        item_index = interactions_df["item_id"].astype("category").cat.codes.values
         assert len(user_index) == len(item_index)
 
         sparse_interactions = csr_matrix(
